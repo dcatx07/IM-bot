@@ -1,80 +1,175 @@
-import os
-import requests
-from flask import Flask, request, jsonify
+const express = require('express');
+const axios = require('axios');
 
-app = Flask(__name__)
+const app = express();
+// Дозволяє серверу читати JSON-дані з вхідних запитів
+app.use(express.json());
 
-VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN', 'my_super_secret_token_123')
-WHATSAPP_TOKEN = os.environ.get('WHATSAPP_TOKEN', '')
-PHONE_NUMBER_ID = os.environ.get('PHONE_NUMBER_ID', '')
+// Змінні оточення
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_super_secret_token_123';
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || '';
+const ADMIN_PHONE = process.env.ADMIN_PHONE || '380000000000';
 
-# ДОДАЄМО: Номер адміністратора (змінна оточення або просто вписати сюди)
-# Номер має бути у міжнародному форматі без плюса (наприклад, 380501234567)
-ADMIN_PHONE = os.environ.get('ADMIN_PHONE', '380000000000') 
+// Наша база знань
+const faqData = {
+    "графік": "Ми працюємо з 9:00 до 18:00 з понеділка по п'ятницю.",
+    "адреса": "Наш офіс знаходиться за адресою: м. Київ, вул. Хрещатик, 1.",
+    "ціна": "Вартість наших послуг починається від 1000 грн."
+};
 
-def send_whatsapp_message(to_number, text_message):
-    # ... (ця функція залишається без змін з попереднього кроку) ...
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+// ==========================================
+// ФУНКЦІЇ ДЛЯ ВІДПРАВКИ ПОВІДОМЛЕНЬ
+// ==========================================
+
+async function sendWhatsAppMessage(toNumber, textMessage) {
+    const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
+    const data = {
+        messaging_product: "whatsapp",
+        to: toNumber,
+        type: "text",
+        text: { body: textMessage }
+    };
+    const headers = {
+        "Authorization": `Bearer ${WHATSAPP_TOKEN}`,
         "Content-Type": "application/json"
+    };
+    
+    try {
+        await axios.post(url, data, { headers });
+    } catch (error) {
+        console.error("Помилка відправки тексту:", error.response?.data || error.message);
     }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": text_message}
+}
+
+async function sendButtonMessage(toNumber, textMessage, buttonsList) {
+    const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
+    
+    // Формуємо масив кнопок (максимум 3)
+    const buttons = buttonsList.slice(0, 3).map((title, index) => ({
+        type: "reply",
+        reply: {
+            id: `btn_${index}`,
+            title: title.substring(0, 20) // Обмеження Meta на 20 символів
+        }
+    }));
+
+    const data = {
+        messaging_product: "whatsapp",
+        to: toNumber,
+        type: "interactive",
+        interactive: {
+            type: "button",
+            body: { text: textMessage },
+            action: { buttons: buttons }
+        }
+    };
+
+    try {
+        await axios.post(url, data, {
+            headers: { "Authorization": `Bearer ${WHATSAPP_TOKEN}` }
+        });
+    } catch (error) {
+        console.error("Помилка відправки кнопок:", error.response?.data || error.message);
     }
-    requests.post(url, headers=headers, json=payload)
+}
 
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    # ... (GET запит для верифікації залишається без змін) ...
+async function sendDocument(toNumber, documentUrl, filename = "document.pdf") {
+    const url = `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`;
+    const data = {
+        messaging_product: "whatsapp",
+        to: toNumber,
+        type: "document",
+        document: {
+            link: documentUrl,
+            filename: filename
+        }
+    };
 
-    if request.method == 'POST':
-        data = request.json
-        if data.get('object') == 'whatsapp_business_account':
-            try:
-                entry = data['entry'][0]
-                changes = entry['changes'][0]
-                value = changes['value']
+    try {
+        await axios.post(url, data, {
+            headers: { "Authorization": `Bearer ${WHATSAPP_TOKEN}` }
+        });
+    } catch (error) {
+        console.error("Помилка відправки документа:", error.response?.data || error.message);
+    }
+}
+
+// ==========================================
+// ОБРОБКА ВЕБХУКІВ (МАРШРУТИ)
+// ==========================================
+
+// 1. GET-запит: Верифікація від Meta
+app.get('/webhook', (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+        console.log("Вебхук успішно верифіковано!");
+        // Meta вимагає повернути challenge як звичайний текст
+        res.status(200).send(challenge);
+    } else {
+        res.status(403).send("Помилка верифікації");
+    }
+});
+
+// 2. POST-запит: Отримання повідомлень від клієнтів
+app.post('/webhook', async (req, res) => {
+    const data = req.body;
+
+    if (data.object === 'whatsapp_business_account') {
+        // Використовуємо опціональний ланцюжок (?.) для безпечного читання JSON
+        const message = data.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        
+        if (message && message.type === 'text') {
+            const senderPhone = message.from;
+            const userMessage = message.text.body.toLowerCase();
+
+            console.log(`Отримано повідомлення від ${senderPhone}: ${userMessage}`);
+
+            const triggerWords = ["замовити", "людину", "менеджер", "підтвердити", "купити"];
+            const hasTrigger = triggerWords.some(word => userMessage.includes(word));
+
+            if (hasTrigger) {
+                // Перенаправлення на менеджера
+                await sendWhatsAppMessage(senderPhone, "Дякую! Ваше повідомлення передано адміністратору. Очікуйте на відповідь.");
                 
-                if 'messages' in value:
-                    message = value['messages'][0]
-                    sender_phone = message['from']  # Номер клієнта
-                    user_message = message['text']['body'].lower() # Текст клієнта
+                const adminAlert = `🚨 УВАГА! Запит від клієнта!\nНомер: +${senderPhone}\nТекст: ${userMessage}`;
+                await sendWhatsAppMessage(ADMIN_PHONE, adminAlert);
+            
+            } else if (userMessage.includes("меню") || userMessage.includes("привіт")) {
+                // Відправляємо кнопки
+                await sendButtonMessage(senderPhone, "Вітаю! Чим я можу вам допомогти?", ["Прайс", "Контакти", "Менеджер"]);
+            
+            } else if (userMessage.includes("прайс")) {
+                // Відправляємо PDF
+                await sendDocument(
+                    senderPhone, 
+                    "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", 
+                    "Прайс_2026.pdf"
+                );
 
-                    # ==========================================
-                    # НОВА ЛОГІКА: Перевірка на потребу зв'язку з менеджером
-                    # ==========================================
-                    trigger_words = ["замовити", "людину", "менеджер", "підтвердити", "купити"]
-                    
-                    # Перевіряємо, чи є в тексті хоча б одне слово-тригер
-                    if any(word in user_message for word in trigger_words):
-                        
-                        # 1. Заспокоюємо клієнта
-                        send_whatsapp_message(sender_phone, "Дякую! Ваше повідомлення передано адміністратору. Очікуйте на відповідь.")
-                        
-                        # 2. Формуємо текст для адміна (додаємо номер клієнта, щоб знати, кому відповідати)
-                        admin_alert = f"🚨 УВАГА! Запит від клієнта!\nНомер: +{sender_phone}\nТекст: {user_message}"
-                        
-                        # 3. Відправляємо адміну
-                        send_whatsapp_message(ADMIN_PHONE, admin_alert)
+            } else {
+                // Звичайна перевірка FAQ
+                let reply = "Я бот. Напишіть 'менеджер', щоб зв'язатися з людиною, або 'меню' для опцій.";
+                for (const [key, value] of Object.entries(faqData)) {
+                    if (userMessage.includes(key)) {
+                        reply = value;
+                        break;
+                    }
+                }
+                await sendWhatsAppMessage(senderPhone, reply);
+            }
+        }
+    }
+    
+    // Завжди відповідаємо 200 OK, щоб Meta не дублювала запити
+    res.status(200).send("OK");
+});
 
-                    else:
-                        # Звичайна логіка FAQ (якщо тригерних слів немає)
-                        faq_data = {"графік": "з 9 до 18", "ціна": "від 1000 грн"}
-                        reply = "Я бот. Напишіть 'менеджер', щоб зв'язатися з людиною."
-                        for key in faq_data:
-                            if key in user_message:
-                                reply = faq_data[key]
-                                break
-                        send_whatsapp_message(sender_phone, reply)
-
-            except KeyError:
-                pass
-
-        return jsonify({"status": "ok"}), 200
-
-if __name__ == '__main__':
-    app.run(port=5000)
+// Запуск сервера
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`Сервер працює на порту ${PORT}`);
+});
