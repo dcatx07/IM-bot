@@ -5,11 +5,7 @@ const app = express();
 // Дозволяє серверу читати JSON-дані з вхідних запитів
 app.use(express.json());
 
-// Змінні оточення
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'my_super_secret_token_123';
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || '';
-const ADMIN_PHONE = process.env.ADMIN_PHONE || '380000000000';
+
 
 // Наша база знань
 const faqData = {
